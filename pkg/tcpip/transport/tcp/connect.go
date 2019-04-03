@@ -590,17 +590,11 @@ func sendSynTCP(r *stack.Route, id stack.TransportEndpointID, ttl uint8, flags b
 	return err
 }
 
-// sendTCP sends a TCP segment with the provided options via the provided
-// network endpoint and under the provided identity.
-func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
+func buildTCPHdr(r *stack.Route, id stack.TransportEndpointID, d *stack.PacketDescriptor, data buffer.VectorisedView, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) {
 	optLen := len(opts)
-	// Allocate a buffer for the TCP header.
-	hdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
-
-	if rcvWnd > 0xffff {
-		rcvWnd = 0xffff
-	}
-
+	hdr := &d.Hdr
+	packetSize := d.Size
+	off := d.Off
 	// Initialize the header.
 	tcp := header.TCP(hdr.Prepend(header.TCPMinimumSize + optLen))
 	tcp.Encode(&header.TCPFields{
@@ -614,7 +608,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	})
 	copy(tcp[header.TCPMinimumSize:], opts)
 
-	length := uint16(hdr.UsedLength() + data.Size())
+	length := uint16(hdr.UsedLength() + packetSize)
 	xsum := r.PseudoHeaderChecksum(ProtocolNumber, length)
 	// Only calculate the checksum if offloading isn't supported.
 	if gso != nil && gso.NeedsCsum {
@@ -624,7 +618,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 		// header and data and get the right sum of the TCP packet.
 		tcp.SetChecksum(xsum)
 	} else if r.Capabilities()&stack.CapabilityTXChecksumOffload == 0 {
-		xsum = header.ChecksumVV(data, xsum)
+		xsum = header.ChecksumVVWithOffset(data, xsum, off, packetSize)
 		tcp.SetChecksum(^tcp.CalculateChecksum(xsum))
 	}
 
@@ -632,8 +626,56 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 	if (flags & header.TCPFlagRst) != 0 {
 		r.Stats().TCP.ResetsSent.Increment()
 	}
+}
 
-	return r.WritePacket(gso, hdr, data, ProtocolNumber, ttl, ttl == 0 /* useDefaultTTL */)
+func sendTCPBatch(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
+	optLen := len(opts)
+	if rcvWnd > 0xffff {
+		rcvWnd = 0xffff
+	}
+
+	mss := int(gso.MSS)
+	n := (data.Size() + mss - 1) / mss
+
+	hdrs := stack.NewPacketDescriptors(n, header.TCPMinimumSize+int(r.MaxHeaderLength())+optLen)
+
+	size := data.Size()
+	off := 0
+	for i := 0; i < n; i++ {
+		packetSize := mss
+		if packetSize > size {
+			packetSize = size
+		}
+		size -= packetSize
+		hdrs[i].Off = off
+		hdrs[i].Size = packetSize
+		buildTCPHdr(r, id, &hdrs[i], data, flags, seq, ack, rcvWnd, opts, gso)
+		off += packetSize
+		seq = seq.Add(seqnum.Size(packetSize))
+	}
+	return r.WritePackets(gso, hdrs, data, ProtocolNumber, ttl, ttl == 0 /* useDefaultTTL */)
+}
+
+// sendTCP sends a TCP segment with the provided options via the provided
+// network endpoint and under the provided identity.
+func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
+	optLen := len(opts)
+	if rcvWnd > 0xffff {
+		rcvWnd = 0xffff
+	}
+
+	mss := data.Size()
+	if r.Loop&stack.PacketLoop == 0 && gso != nil && gso.Type == stack.GSOSW && int(gso.MSS) < mss {
+		return sendTCPBatch(r, id, data, ttl, flags, seq, ack, rcvWnd, opts, gso)
+	}
+
+	d := &stack.PacketDescriptor{
+		Hdr:  buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen),
+		Off:  0,
+		Size: data.Size(),
+	}
+	buildTCPHdr(r, id, d, data, flags, seq, ack, rcvWnd, opts, gso)
+	return r.WritePacket(gso, d.Hdr, data, ProtocolNumber, ttl, ttl == 0 /* useDefaultTTL */)
 }
 
 // makeOptions makes an options slice.

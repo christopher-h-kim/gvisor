@@ -178,8 +178,11 @@ type Config struct {
 	// capabilities.
 	EnableRaw bool
 
-	// GSO indicates that generic segmentation offload is enabled.
-	GSO bool
+	// HardwareGSO indicates that generic segmentation offload is enabled.
+	HardwareGSO bool
+
+	// SoftwareGSO indicates that generic segmentation offload is enabled.
+	SoftwareGSO bool
 
 	// LogPackets indicates that all network packets should be logged.
 	LogPackets bool
@@ -271,6 +274,8 @@ func (c *Config) ToFlags() []string {
 		"--rootless=" + strconv.FormatBool(c.Rootless),
 		"--alsologtostderr=" + strconv.FormatBool(c.AlsoLogToStderr),
 		"--ref-leak-mode=" + refsLeakModeToString(c.ReferenceLeakMode),
+		"--gso=" + strconv.FormatBool(c.HardwareGSO),
+		"--software-gso=" + strconv.FormatBool(c.SoftwareGSO),
 	}
 	// Only include these if set since it is never to be used by users.
 	if c.TestOnlyAllowRunAsCurrentUserWithoutChroot {
