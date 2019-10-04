@@ -251,7 +251,7 @@ func (h *handshake) synSentState(s *segment) *tcpip.Error {
 		SACKPermitted: rcvSynOpts.SACKPermitted,
 		MSS:           h.ep.amss,
 	}
-	sendSynTCP(&s.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+	sendSynTCP(&s.route, h.ep.id, h.ep.sendTOS, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 
 	return nil
 }
@@ -296,7 +296,7 @@ func (h *handshake) synRcvdState(s *segment) *tcpip.Error {
 			SACKPermitted: h.ep.sackPermitted,
 			MSS:           h.ep.amss,
 		}
-		sendSynTCP(&s.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+		sendSynTCP(&s.route, h.ep.id, h.ep.sendTOS, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 		return nil
 	}
 
@@ -460,7 +460,7 @@ func (h *handshake) execute() *tcpip.Error {
 			synOpts.WS = -1
 		}
 	}
-	sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+	sendSynTCP(&h.ep.route, h.ep.id, h.ep.sendTOS, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 	for h.state != handshakeCompleted {
 		switch index, _ := s.Fetch(true); index {
 		case wakerForResend:
@@ -469,7 +469,7 @@ func (h *handshake) execute() *tcpip.Error {
 				return tcpip.ErrTimeout
 			}
 			rt.Reset(timeOut)
-			sendSynTCP(&h.ep.route, h.ep.id, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
+			sendSynTCP(&h.ep.route, h.ep.id, h.ep.sendTOS, h.flags, h.iss, h.ackNum, h.rcvWnd, synOpts)
 
 		case wakerForNotification:
 			n := h.ep.fetchNotifications()
@@ -579,16 +579,16 @@ func makeSynOptions(opts header.TCPSynOptions) []byte {
 	return options[:offset]
 }
 
-func sendSynTCP(r *stack.Route, id stack.TransportEndpointID, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts header.TCPSynOptions) *tcpip.Error {
+func sendSynTCP(r *stack.Route, id stack.TransportEndpointID, tos uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts header.TCPSynOptions) *tcpip.Error {
 	options := makeSynOptions(opts)
-	err := sendTCP(r, id, buffer.VectorisedView{}, r.DefaultTTL(), flags, seq, ack, rcvWnd, options, nil)
+	err := sendTCP(r, id, buffer.VectorisedView{}, r.DefaultTTL(), tos, flags, seq, ack, rcvWnd, options, nil)
 	putOptions(options)
 	return err
 }
 
 // sendTCP sends a TCP segment with the provided options via the provided
 // network endpoint and under the provided identity.
-func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
+func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.VectorisedView, ttl uint8, tos uint8, flags byte, seq, ack seqnum.Value, rcvWnd seqnum.Size, opts []byte, gso *stack.GSO) *tcpip.Error {
 	optLen := len(opts)
 	// Allocate a buffer for the TCP header.
 	hdr := buffer.NewPrependable(header.TCPMinimumSize + int(r.MaxHeaderLength()) + optLen)
@@ -629,7 +629,7 @@ func sendTCP(r *stack.Route, id stack.TransportEndpointID, data buffer.Vectorise
 		r.Stats().TCP.ResetsSent.Increment()
 	}
 
-	return r.WritePacket(gso, hdr, data, ProtocolNumber, ttl)
+	return r.WritePacket(gso, hdr, data, ProtocolNumber, ttl, tos)
 }
 
 // makeOptions makes an options slice.
@@ -678,7 +678,7 @@ func (e *endpoint) sendRaw(data buffer.VectorisedView, flags byte, seq, ack seqn
 		sackBlocks = e.sack.Blocks[:e.sack.NumBlocks]
 	}
 	options := e.makeOptions(sackBlocks)
-	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), flags, seq, ack, rcvWnd, options, e.gso)
+	err := sendTCP(&e.route, e.id, data, e.route.DefaultTTL(), e.sendTOS, flags, seq, ack, rcvWnd, options, e.gso)
 	putOptions(options)
 	return err
 }

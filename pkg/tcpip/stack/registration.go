@@ -170,7 +170,7 @@ type NetworkEndpoint interface {
 
 	// WritePacket writes a packet to the given destination address and
 	// protocol.
-	WritePacket(r *Route, gso *GSO, hdr buffer.Prependable, payload buffer.VectorisedView, protocol tcpip.TransportProtocolNumber, ttl uint8, loop PacketLooping) *tcpip.Error
+	WritePacket(r *Route, gso *GSO, hdr buffer.Prependable, payload buffer.VectorisedView, protocol tcpip.TransportProtocolNumber, ttl uint8, tos uint8, loop PacketLooping) *tcpip.Error
 
 	// WriteHeaderIncludedPacket writes a packet that includes a network
 	// header to the given destination address.

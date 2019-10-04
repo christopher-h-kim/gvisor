@@ -389,7 +389,7 @@ func send4(r *stack.Route, ident uint16, data buffer.View) *tcpip.Error {
 	icmpv4.SetChecksum(0)
 	icmpv4.SetChecksum(^header.Checksum(icmpv4, header.Checksum(data, 0)))
 
-	return r.WritePacket(nil /* gso */, hdr, data.ToVectorisedView(), header.ICMPv4ProtocolNumber, r.DefaultTTL())
+	return r.WritePacket(nil /* gso */, hdr, data.ToVectorisedView(), header.ICMPv4ProtocolNumber, r.DefaultTTL(), 0)
 }
 
 func send6(r *stack.Route, ident uint16, data buffer.View) *tcpip.Error {
@@ -412,7 +412,7 @@ func send6(r *stack.Route, ident uint16, data buffer.View) *tcpip.Error {
 	icmpv6.SetChecksum(0)
 	icmpv6.SetChecksum(^header.Checksum(icmpv6, header.Checksum(data, 0)))
 
-	return r.WritePacket(nil /* gso */, hdr, data.ToVectorisedView(), header.ICMPv6ProtocolNumber, r.DefaultTTL())
+	return r.WritePacket(nil /* gso */, hdr, data.ToVectorisedView(), header.ICMPv6ProtocolNumber, r.DefaultTTL(), 0)
 }
 
 func (e *endpoint) checkV4Mapped(addr *tcpip.FullAddress, allowMismatch bool) (tcpip.NetworkProtocolNumber, *tcpip.Error) {

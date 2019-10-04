@@ -465,6 +465,99 @@ func TestSimpleReceive(t *testing.T) {
 	)
 }
 
+func TestTOSV4(t *testing.T) {
+	c := context.New(t, defaultMTU)
+	defer c.Cleanup()
+
+	ep, err := c.Stack().NewEndpoint(tcp.ProtocolNumber, ipv4.ProtocolNumber, &c.WQ)
+	if err != nil {
+		t.Fatalf("NewEndpoint failed: %v", err)
+	}
+	c.EP = ep
+
+	const tos = 0xC0
+	if err := c.EP.SetSockOpt(tcpip.IPv4TOSOption(tos)); err != nil {
+		t.Fatalf("SetSockOpt failed: %v", err)
+	}
+
+	var v tcpip.IPv4TOSOption
+	if err := c.EP.GetSockOpt(&v); err != nil || v != tcpip.IPv4TOSOption(tos) {
+		t.Fatalf("GetSockOpt failed: %v", err)
+	}
+
+	testV4Connect(t, c, checker.TOS(tos, 0))
+
+	data := []byte{1, 2, 3}
+	view := buffer.NewView(len(data))
+	copy(view, data)
+
+	if _, _, err := c.EP.Write(tcpip.SlicePayload(view), tcpip.WriteOptions{}); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Check that data is received.
+	b := c.GetPacket()
+	checker.IPv4(t, b,
+		checker.PayloadLen(len(data)+header.TCPMinimumSize),
+		checker.TCP(
+			checker.DstPort(context.TestPort),
+			checker.SeqNum(uint32(c.IRS)+1),
+			checker.AckNum(790),
+			checker.TCPFlagsMatch(header.TCPFlagAck, ^uint8(header.TCPFlagPsh)),
+		),
+		checker.TOS(tos, 0),
+	)
+
+	if p := b[header.IPv4MinimumSize+header.TCPMinimumSize:]; !bytes.Equal(data, p) {
+		t.Fatalf("got data = %v, want = %v", p, data)
+	}
+}
+
+func TestTOSV6(t *testing.T) {
+	c := context.New(t, defaultMTU)
+	defer c.Cleanup()
+
+	c.CreateV6Endpoint(false)
+
+	const tos = 0xC0
+	if err := c.EP.SetSockOpt(tcpip.IPv6TrafficClassOption(tos)); err != nil {
+		t.Fatalf("SetSockOpt failed: %v", err)
+	}
+
+	var v tcpip.IPv6TrafficClassOption
+	if err := c.EP.GetSockOpt(&v); err != nil || v != tcpip.IPv6TrafficClassOption(tos) {
+		t.Fatalf("GetSockOpt failed: %v", err)
+	}
+
+	// Test the connection request.
+	testV6Connect(t, c, checker.TOS(tos, 0))
+
+	data := []byte{1, 2, 3}
+	view := buffer.NewView(len(data))
+	copy(view, data)
+
+	if _, _, err := c.EP.Write(tcpip.SlicePayload(view), tcpip.WriteOptions{}); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Check that data is received.
+	b := c.GetV6Packet()
+	checker.IPv6(t, b,
+		checker.PayloadLen(len(data)+header.TCPMinimumSize),
+		checker.TCP(
+			checker.DstPort(context.TestPort),
+			checker.SeqNum(uint32(c.IRS)+1),
+			checker.AckNum(790),
+			checker.TCPFlagsMatch(header.TCPFlagAck, ^uint8(header.TCPFlagPsh)),
+		),
+		checker.TOS(tos, 0),
+	)
+
+	if p := b[header.IPv6MinimumSize+header.TCPMinimumSize:]; !bytes.Equal(data, p) {
+		t.Fatalf("got data = %v, want = %v", p, data)
+	}
+}
+
 func TestConnectBindToDevice(t *testing.T) {
 	for _, test := range []struct {
 		name   string

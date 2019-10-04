@@ -90,6 +90,9 @@ type endpoint struct {
 	reusePort      bool
 	bindToDevice   tcpip.NICID
 	broadcast      bool
+	// sendTOS represents IPv4 TOS or IPv6 TrafficClass,
+	// applied while sending packets. Defaults to 0 as on Linux.
+	sendTOS uint8
 
 	// shutdownFlags represent the current shutdown state of the endpoint.
 	shutdownFlags tcpip.ShutdownFlags
@@ -379,7 +382,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 		ttl = e.multicastTTL
 	}
 
-	if err := sendUDP(route, buffer.View(v).ToVectorisedView(), e.id.LocalPort, dstPort, ttl); err != nil {
+	if err := sendUDP(route, buffer.View(v).ToVectorisedView(), e.id.LocalPort, dstPort, ttl, e.sendTOS); err != nil {
 		return 0, nil, err
 	}
 	return int64(len(v)), nil, nil
@@ -573,6 +576,18 @@ func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {
 		e.mu.Unlock()
 
 		return nil
+
+	case tcpip.IPv4TOSOption:
+		e.mu.Lock()
+		e.sendTOS = uint8(v)
+		e.mu.Unlock()
+		return nil
+
+	case tcpip.IPv6TrafficClassOption:
+		e.mu.Lock()
+		e.sendTOS = uint8(v)
+		e.mu.Unlock()
+		return nil
 	}
 	return nil
 }
@@ -687,14 +702,27 @@ func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
 		}
 		return nil
 
+	case *tcpip.IPv4TOSOption:
+		e.mu.RLock()
+		*o = tcpip.IPv4TOSOption(e.sendTOS)
+		e.mu.RUnlock()
+		return nil
+
+	case *tcpip.IPv6TrafficClassOption:
+		e.mu.RLock()
+		*o = tcpip.IPv6TrafficClassOption(e.sendTOS)
+		e.mu.RUnlock()
+		return nil
+
 	default:
 		return tcpip.ErrUnknownProtocolOption
 	}
+	return tcpip.ErrUnknownProtocolOption
 }
 
 // sendUDP sends a UDP segment via the provided network endpoint and under the
 // provided identity.
-func sendUDP(r *stack.Route, data buffer.VectorisedView, localPort, remotePort uint16, ttl uint8) *tcpip.Error {
+func sendUDP(r *stack.Route, data buffer.VectorisedView, localPort, remotePort uint16, ttl uint8, tos uint8) *tcpip.Error {
 	// Allocate a buffer for the UDP header.
 	hdr := buffer.NewPrependable(header.UDPMinimumSize + int(r.MaxHeaderLength()))
 
@@ -720,7 +748,7 @@ func sendUDP(r *stack.Route, data buffer.VectorisedView, localPort, remotePort u
 	// Track count of packets sent.
 	r.Stats().UDP.PacketsSent.Increment()
 
-	return r.WritePacket(nil /* gso */, hdr, data, ProtocolNumber, ttl)
+	return r.WritePacket(nil /* gso */, hdr, data, ProtocolNumber, ttl, tos)
 }
 
 func (e *endpoint) checkV4Mapped(addr *tcpip.FullAddress, allowMismatch bool) (tcpip.NetworkProtocolNumber, *tcpip.Error) {

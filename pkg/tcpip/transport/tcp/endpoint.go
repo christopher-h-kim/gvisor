@@ -404,6 +404,10 @@ type endpoint struct {
 	// amss is the advertised MSS to the peer by this endpoint.
 	amss uint16
 
+	// sendTOS represents IPv4 TOS or IPv6 TrafficClass,
+	// applied while sending packets. Defaults to 0 as on Linux.
+	sendTOS uint8
+
 	gso *stack.GSO
 }
 
@@ -1184,6 +1188,19 @@ func (e *endpoint) SetSockOpt(opt interface{}) *tcpip.Error {
 		// Linux returns ENOENT when an invalid congestion
 		// control algorithm is specified.
 		return tcpip.ErrNoSuchFile
+
+	case tcpip.IPv4TOSOption:
+		e.mu.Lock()
+		e.sendTOS = uint8(v)
+		e.mu.Unlock()
+		return nil
+
+	case tcpip.IPv6TrafficClassOption:
+		e.mu.Lock()
+		e.sendTOS = uint8(v)
+		e.mu.Unlock()
+		return nil
+
 	default:
 		return nil
 	}
@@ -1377,9 +1394,19 @@ func (e *endpoint) GetSockOpt(opt interface{}) *tcpip.Error {
 		e.mu.Unlock()
 		return nil
 
-	default:
-		return tcpip.ErrUnknownProtocolOption
+	case *tcpip.IPv4TOSOption:
+		e.mu.RLock()
+		*o = tcpip.IPv4TOSOption(e.sendTOS)
+		e.mu.RUnlock()
+		return nil
+
+	case *tcpip.IPv6TrafficClassOption:
+		e.mu.RLock()
+		*o = tcpip.IPv6TrafficClassOption(e.sendTOS)
+		e.mu.RUnlock()
+		return nil
 	}
+	return tcpip.ErrUnknownProtocolOption
 }
 
 func (e *endpoint) checkV4Mapped(addr *tcpip.FullAddress) (tcpip.NetworkProtocolNumber, *tcpip.Error) {

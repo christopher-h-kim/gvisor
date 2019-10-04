@@ -1207,6 +1207,39 @@ func TestTTL(t *testing.T) {
 	}
 }
 
+func TestTOS(t *testing.T) {
+	for _, flow := range []testFlow{unicastV4, unicastV4in6, unicastV6, unicastV6Only, multicastV4, multicastV4in6, multicastV6, broadcast, broadcastIn6} {
+		t.Run(fmt.Sprintf("flow:%s", flow), func(t *testing.T) {
+			c := newDualTestContext(t, defaultMTU)
+			defer c.cleanup()
+
+			c.createEndpointForFlow(flow)
+
+			const tos = 0xC0
+			if flow.isV4() {
+				if err := c.ep.SetSockOpt(tcpip.IPv4TOSOption(tos)); err != nil {
+					c.t.Fatalf("SetSockOpt failed: %v", err)
+				}
+				var v tcpip.IPv4TOSOption
+				if err := c.ep.GetSockOpt(&v); err != nil || v != tcpip.IPv4TOSOption(tos) {
+					c.t.Fatalf("GetSockOpt failed: %v", err)
+				}
+
+			} else {
+				if err := c.ep.SetSockOpt(tcpip.IPv6TrafficClassOption(tos)); err != nil {
+					c.t.Fatalf("SetSockOpt failed: %v", err)
+				}
+				var v tcpip.IPv6TrafficClassOption
+				if err := c.ep.GetSockOpt(&v); err != nil || v != tcpip.IPv6TrafficClassOption(tos) {
+					c.t.Fatalf("GetSockOpt failed: %v", err)
+				}
+
+			}
+			testWrite(c, flow, checker.TOS(tos, 0))
+		})
+	}
+}
+
 func TestMulticastInterfaceOption(t *testing.T) {
 	for _, flow := range []testFlow{multicastV4, multicastV4in6, multicastV6, multicastV6Only} {
 		t.Run(fmt.Sprintf("flow:%s", flow), func(t *testing.T) {
