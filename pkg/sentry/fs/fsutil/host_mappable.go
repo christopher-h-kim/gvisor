@@ -101,6 +101,11 @@ func (h *HostMappable) Translate(ctx context.Context, required, optional memmap.
 
 // InvalidateUnsavable implements memmap.Mappable.InvalidateUnsavable.
 func (h *HostMappable) InvalidateUnsavable(ctx context.Context) error {
+	return h.InvalidateAll(ctx)
+}
+
+// InvalidateAll implements memmap.Mappable.InvalidateAll.
+func (h *HostMappable) InvalidateAll(ctx context.Context) error {
 	h.mu.Lock()
 	h.mappings.InvalidateAll(memmap.InvalidateOpts{})
 	h.mu.Unlock()

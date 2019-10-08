@@ -175,7 +175,7 @@ func (i *inodeFileState) setSharedHandlesLocked(flags fs.FileFlags, h *handles) 
 
 // getHandles returns a set of handles for a new file using i opened with the
 // given flags.
-func (i *inodeFileState) getHandles(ctx context.Context, flags fs.FileFlags) (*handles, error) {
+func (i *inodeFileState) getHandles(ctx context.Context, flags fs.FileFlags, cache *fsutil.CachingInodeOperations) (*handles, error) {
 	if !i.canShareHandles() {
 		return newHandles(ctx, i.file, flags)
 	}
@@ -187,6 +187,11 @@ func (i *inodeFileState) getHandles(ctx context.Context, flags fs.FileFlags) (*h
 			i.writeHandles.IncRef()
 			return i.writeHandles, nil
 		}
+
+		if err := i.invalidateReadHandle(ctx, cache); err != nil {
+			return nil, err
+		}
+
 	} else if i.readHandles != nil {
 		i.readHandles.IncRef()
 		return i.readHandles, nil
@@ -203,15 +208,17 @@ func (i *inodeFileState) getHandles(ctx context.Context, flags fs.FileFlags) (*h
 // ReadToBlocksAt implements fsutil.CachedFileObject.ReadToBlocksAt.
 func (i *inodeFileState) ReadToBlocksAt(ctx context.Context, dsts safemem.BlockSeq, offset uint64) (uint64, error) {
 	i.handlesMu.RLock()
-	defer i.handlesMu.RUnlock()
-	return i.readHandles.readWriterAt(ctx, int64(offset)).ReadToBlocks(dsts)
+	n, err := i.readHandles.readWriterAt(ctx, int64(offset)).ReadToBlocks(dsts)
+	i.handlesMu.RUnlock()
+	return n, err
 }
 
 // WriteFromBlocksAt implements fsutil.CachedFileObject.WriteFromBlocksAt.
 func (i *inodeFileState) WriteFromBlocksAt(ctx context.Context, srcs safemem.BlockSeq, offset uint64) (uint64, error) {
 	i.handlesMu.RLock()
-	defer i.handlesMu.RUnlock()
-	return i.writeHandles.readWriterAt(ctx, int64(offset)).WriteFromBlocks(srcs)
+	n, err := i.writeHandles.readWriterAt(ctx, int64(offset)).WriteFromBlocks(srcs)
+	i.handlesMu.RUnlock()
+	return n, err
 }
 
 // SetMaskedAttributes implements fsutil.CachedFileObject.SetMaskedAttributes.
@@ -338,6 +345,39 @@ func (i *inodeFileState) Allocate(ctx context.Context, offset, length int64) err
 	return i.writeHandles.File.allocate(ctx, mode, uint64(offset), uint64(length))
 }
 
+// invalidateReadHandle closes readonly handle and invalidates any mapping that
+// may exist. This is done to workaround a problem in overlayfs that doesn't
+// update open FDs after CopyUp is triggered. It's a noop if overlayfsStaleRead
+// is false (default).
+//
+// Caller must hold handlesMu exclusively.
+func (i *inodeFileState) invalidateReadHandle(ctx context.Context, cache *fsutil.CachingInodeOperations) error {
+	// Invalidate if:
+	//   - Mount option 'overlayfs_stale_read' is set
+	//   - Read handle is open: nothing to invalidate otherwise
+	//   - Write handle is not open: file was not open for write yet and not
+	//     copied up by overlay.
+	if !i.s.overlayfsStaleRead || i.readHandles == nil || i.writeHandles != nil {
+		return nil
+	}
+
+	if err := cache.InvalidateAll(ctx); err != nil {
+		return err
+	}
+	if i.hostMappable != nil {
+		if err := i.hostMappable.InvalidateAll(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Open files may still point to the readHandles being invalidated. Reads to
+	// these files will return stale data, however this is the same behavior the
+	// application would get if it were running natively with overlayfs.
+	i.readHandles.DecRef()
+	i.readHandles = nil
+	return nil
+}
+
 // session extracts the gofer's session from the MountSource.
 func (i *inodeOperations) session() *session {
 	return i.fileState.s
@@ -449,7 +489,7 @@ func (i *inodeOperations) NonBlockingOpen(ctx context.Context, p fs.PermMask) (*
 }
 
 func (i *inodeOperations) getFileDefault(ctx context.Context, d *fs.Dirent, flags fs.FileFlags) (*fs.File, error) {
-	h, err := i.fileState.getHandles(ctx, flags)
+	h, err := i.fileState.getHandles(ctx, flags, i.cachingInodeOps)
 	if err != nil {
 		return nil, err
 	}

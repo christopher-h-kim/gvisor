@@ -959,6 +959,26 @@ func (c *CachingInodeOperations) InvalidateUnsavable(ctx context.Context) error 
 	return nil
 }
 
+// InvalidateAll implements memmap.Mappable.InvalidateAll.
+func (c *CachingInodeOperations) InvalidateAll(ctx context.Context) error {
+	c.mapsMu.Lock()
+	defer c.mapsMu.Unlock()
+	c.mappings.InvalidateAll(memmap.InvalidateOpts{})
+
+	// Write out dirty pages to disk before dropping the cache.
+	mf := c.mfp.MemoryFile()
+	c.dataMu.Lock()
+	defer c.dataMu.Unlock()
+	if err := SyncDirtyAll(ctx, &c.cache, &c.dirty, uint64(c.attr.Size), mf, c.backingFile.WriteFromBlocksAt); err != nil {
+		return err
+	}
+
+	c.cache.DropAll(mf)
+	c.dirty.RemoveAll()
+
+	return nil
+}
+
 // Evict implements pgalloc.EvictableMemoryUser.Evict.
 func (c *CachingInodeOperations) Evict(ctx context.Context, er pgalloc.EvictableRange) {
 	c.mapsMu.Lock()
