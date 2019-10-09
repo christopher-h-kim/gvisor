@@ -214,28 +214,54 @@ func (f *fileOperations) readdirAll(ctx context.Context) (map[string]fs.DentAttr
 	return entries, nil
 }
 
+// maybeSync will call FSync on the file if either the cache policy or file
+// flags require it. If the err argument is non-nil, then it will be returned,
+// otherwise any error encountered in sync will be returned. This makes it easy
+// to call maybeSync in hot paths without using defer.
+func (f *fileOperations) maybeSync(ctx context.Context, file *fs.File, start, end int64, err error) error {
+	flags := file.Flags()
+	cp := f.inodeOperations.session().cachePolicy
+	log.Infof("NLAC: Flags: %v", flags)
+
+	var syncErr error
+	switch {
+	case flags.Direct || flags.Sync || cp.writeThrough(file.Dirent.Inode):
+		log.Infof("NLAC: AAA")
+
+		syncErr = f.Fsync(ctx, file, 0, fs.FileMaxOffset, fs.SyncAll)
+	case flags.DSync:
+		log.Infof("NLAC: BBB")
+		syncErr = f.Fsync(ctx, file, 0, fs.FileMaxOffset, fs.SyncData)
+	}
+
+	// If we were passed a non-nil error, then return that.
+	if err != nil {
+		return err
+	}
+	// Otherwise, return the error from sync (which may be nil).
+	return syncErr
+}
+
 // Write implements fs.FileOperations.Write.
 func (f *fileOperations) Write(ctx context.Context, file *fs.File, src usermem.IOSequence, offset int64) (int64, error) {
 	if fs.IsDir(file.Dirent.Inode.StableAttr) {
 		// Not all remote file systems enforce this so this client does.
 		return 0, syserror.EISDIR
 	}
+
 	cp := f.inodeOperations.session().cachePolicy
 	if cp.useCachingInodeOps(file.Dirent.Inode) {
 		n, err := f.inodeOperations.cachingInodeOps.Write(ctx, src, offset)
-		if err != nil {
-			return n, err
-		}
-		if cp.writeThrough(file.Dirent.Inode) {
-			// Write out the file.
-			err = f.inodeOperations.cachingInodeOps.WriteOut(ctx, file.Dirent.Inode)
-		}
-		return n, err
+		return n, f.maybeSync(ctx, file, offset, offset+n, err)
 	}
+
 	if f.inodeOperations.fileState.hostMappable != nil {
-		return f.inodeOperations.fileState.hostMappable.Write(ctx, src, offset)
+		n, err := f.inodeOperations.fileState.hostMappable.Write(ctx, src, offset)
+		return n, f.maybeSync(ctx, file, offset, offset+n, err)
 	}
-	return src.CopyInTo(ctx, f.handles.readWriterAt(ctx, offset))
+
+	n, err := src.CopyInTo(ctx, f.handles.readWriterAt(ctx, offset))
+	return n, f.maybeSync(ctx, file, offset, offset+n, err)
 }
 
 // incrementReadCounters increments the read counters for the read starting at the given time. We
@@ -273,7 +299,7 @@ func (f *fileOperations) Read(ctx context.Context, file *fs.File, dst usermem.IO
 }
 
 // Fsync implements fs.FileOperations.Fsync.
-func (f *fileOperations) Fsync(ctx context.Context, file *fs.File, start int64, end int64, syncType fs.SyncType) error {
+func (f *fileOperations) Fsync(ctx context.Context, file *fs.File, start, end int64, syncType fs.SyncType) error {
 	switch syncType {
 	case fs.SyncAll, fs.SyncData:
 		if err := file.Dirent.Inode.WriteOut(ctx); err != nil {
