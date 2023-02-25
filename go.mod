@@ -15,7 +15,10 @@ require (
 	github.com/opencontainers/runtime-spec v0.1.2-0.20171211145439-b2d941ef6a78
 	github.com/syndtr/gocapability v0.0.0-20180916011248-d98352740cb2
 	github.com/vishvananda/netlink v1.0.1-0.20190318003149-adb577d4a45e
-	github.com/vishvananda/netns v0.0.0-20171111001504-be1fbeda1936
+	github.com/vishvananda/netns v0.0.0-20171111001504-be1fbeda1936 // indirect
 	golang.org/x/net v0.0.0-20190311183353-d8887717615a
-	golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a
+	golang.org/x/sys v0.1.0
+	golang.org/x/time v0.3.0
+	golang.org/x/tools v0.0.0-20190425150028-36563e24a262
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
